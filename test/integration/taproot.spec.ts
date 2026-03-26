@@ -758,6 +758,131 @@ describe('bitcoinjs-lib (transaction with taproot)', () => {
       'Should succeed validation',
     );
   });
+
+  it('can create (and broadcast via 3PBP) a taproot key-path spend Transaction using signAllInputsHD', async () => {
+    const root = bip32.fromSeed(rng(64), regtest);
+    const path = "m/86'/0'/0'/0/0";
+    const child = root.derivePath(path);
+    const internalKey = toXOnly(child.publicKey);
+
+    const { output, address } = bitcoin.payments.p2tr({
+      internalPubkey: internalKey,
+      network: regtest,
+    });
+
+    const amount = 42e4;
+    const sendAmount = amount - 1e4;
+
+    const unspent = await regtestUtils.faucetComplex(
+      Buffer.from(output!),
+      amount,
+    );
+
+    const psbt = new bitcoin.Psbt({ network: regtest });
+    psbt.addInput({
+      hash: unspent.txId,
+      index: 0,
+      witnessUtxo: { value: BigInt(amount), script: output! },
+      tapInternalKey: internalKey,
+      tapBip32Derivation: [
+        {
+          masterFingerprint: root.fingerprint,
+          pubkey: internalKey,
+          path,
+          leafHashes: [],
+        },
+      ],
+    });
+    psbt.addOutput({ value: BigInt(sendAmount), address: address! });
+
+    // Sign all inputs using HD root — exercises our new taproot HD signing
+    psbt.signAllInputsHD(root);
+    psbt.finalizeAllInputs();
+
+    const tx = psbt.extractTransaction();
+    const hex = tools.toHex(tx.toBuffer());
+
+    await regtestUtils.broadcast(hex);
+    await regtestUtils.verify({
+      txId: tx.getId(),
+      address: address!,
+      vout: 0,
+      value: sendAmount,
+    });
+  });
+
+  it('can create (and broadcast via 3PBP) a taproot script-path spend Transaction using signInputHD', async () => {
+    const root = bip32.fromSeed(rng(64), regtest);
+    const leafPath = "m/86'/0'/0'/0/0";
+    const leafChild = root.derivePath(leafPath);
+    const leafPubkey = toXOnly(leafChild.publicKey);
+
+    // Use an unrelated key as internal key (common pattern for script-path)
+    const internalKey = toXOnly(bip32.fromSeed(rng(64), regtest).publicKey);
+
+    const leafScript = bitcoin.script.fromASM(
+      `${tools.toHex(leafPubkey)} OP_CHECKSIG`,
+    );
+    const scriptTree = { output: leafScript };
+
+    const p2tr = bitcoin.payments.p2tr({
+      internalPubkey: internalKey,
+      scriptTree,
+      redeem: { output: leafScript, redeemVersion: LEAF_VERSION_TAPSCRIPT },
+      network: regtest,
+    });
+
+    const leafHash = tapleafHash({
+      output: leafScript,
+      version: LEAF_VERSION_TAPSCRIPT,
+    });
+
+    const amount = 42e4;
+    const sendAmount = amount - 1e4;
+
+    const unspent = await regtestUtils.faucetComplex(
+      Buffer.from(p2tr.output!),
+      amount,
+    );
+
+    const psbt = new bitcoin.Psbt({ network: regtest });
+    psbt.addInput({
+      hash: unspent.txId,
+      index: 0,
+      witnessUtxo: { value: BigInt(amount), script: p2tr.output! },
+      tapLeafScript: [
+        {
+          leafVersion: LEAF_VERSION_TAPSCRIPT,
+          script: leafScript,
+          controlBlock: p2tr.witness![p2tr.witness!.length - 1],
+        },
+      ],
+      tapBip32Derivation: [
+        {
+          masterFingerprint: root.fingerprint,
+          pubkey: leafPubkey,
+          path: leafPath,
+          leafHashes: [leafHash],
+        },
+      ],
+    });
+    psbt.addOutput({ value: BigInt(sendAmount), address: p2tr.address! });
+
+    // Sign with HD root — script-path: derived key is NOT tweaked
+    psbt.signInputHD(0, root);
+    psbt.finalizeInput(0);
+
+    const tx = psbt.extractTransaction();
+    const hex = tools.toHex(tx.toBuffer());
+
+    await regtestUtils.broadcast(hex);
+    await regtestUtils.verify({
+      txId: tx.getId(),
+      address: p2tr.address!,
+      vout: 0,
+      value: sendAmount,
+    });
+  });
 });
 
 function buildLeafIndexFinalizer(

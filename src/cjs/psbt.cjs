@@ -559,10 +559,7 @@ class Psbt {
     }
     return validationResultCount > 0;
   }
-  signAllInputsHD(
-    hdKeyPair,
-    sighashTypes = [transaction_js_1.Transaction.SIGHASH_ALL],
-  ) {
+  signAllInputsHD(hdKeyPair, sighashTypes) {
     if (!hdKeyPair || !hdKeyPair.publicKey || !hdKeyPair.fingerprint) {
       throw new Error('Need HDSigner to sign input');
     }
@@ -580,10 +577,7 @@ class Psbt {
     }
     return this;
   }
-  signAllInputsHDAsync(
-    hdKeyPair,
-    sighashTypes = [transaction_js_1.Transaction.SIGHASH_ALL],
-  ) {
+  signAllInputsHDAsync(hdKeyPair, sighashTypes) {
     return new Promise((resolve, reject) => {
       if (!hdKeyPair || !hdKeyPair.publicKey || !hdKeyPair.fingerprint) {
         return reject(new Error('Need HDSigner to sign input'));
@@ -610,11 +604,7 @@ class Psbt {
       });
     });
   }
-  signInputHD(
-    inputIndex,
-    hdKeyPair,
-    sighashTypes = [transaction_js_1.Transaction.SIGHASH_ALL],
-  ) {
+  signInputHD(inputIndex, hdKeyPair, sighashTypes) {
     if (!hdKeyPair || !hdKeyPair.publicKey || !hdKeyPair.fingerprint) {
       throw new Error('Need HDSigner to sign input');
     }
@@ -622,11 +612,7 @@ class Psbt {
     signers.forEach(signer => this.signInput(inputIndex, signer, sighashTypes));
     return this;
   }
-  signInputHDAsync(
-    inputIndex,
-    hdKeyPair,
-    sighashTypes = [transaction_js_1.Transaction.SIGHASH_ALL],
-  ) {
+  signInputHDAsync(inputIndex, hdKeyPair, sighashTypes) {
     return new Promise((resolve, reject) => {
       if (!hdKeyPair || !hdKeyPair.publicKey || !hdKeyPair.fingerprint) {
         return reject(new Error('Need HDSigner to sign input'));
@@ -1565,6 +1551,9 @@ function getScriptFromInput(inputIndex, input, cache) {
 }
 function getSignersFromHD(inputIndex, inputs, hdKeyPair) {
   const input = (0, bip174_2.checkForInput)(inputs, inputIndex);
+  if ((0, bip371_js_1.isTaprootInput)(input)) {
+    return getTaprootSignersFromHD(inputIndex, inputs, hdKeyPair);
+  }
   if (!input.bip32Derivation || input.bip32Derivation.length === 0) {
     throw new Error('Need bip32Derivation to sign with HD');
   }
@@ -1587,6 +1576,51 @@ function getSignersFromHD(inputIndex, inputs, hdKeyPair) {
     if (tools.compare(bipDv.pubkey, node.publicKey) !== 0) {
       throw new Error('pubkey did not match bip32Derivation');
     }
+    return node;
+  });
+  return signers;
+}
+function getTaprootSignersFromHD(inputIndex, inputs, hdKeyPair) {
+  const input = (0, bip174_2.checkForInput)(inputs, inputIndex);
+  if (!input.tapBip32Derivation || input.tapBip32Derivation.length === 0) {
+    throw new Error('Need tapBip32Derivation to sign with HD');
+  }
+  const myDerivations = input.tapBip32Derivation
+    .map(bipDv => {
+      if (tools.compare(bipDv.masterFingerprint, hdKeyPair.fingerprint) === 0) {
+        return bipDv;
+      } else {
+        return;
+      }
+    })
+    .filter(v => !!v);
+  if (myDerivations.length === 0) {
+    throw new Error(
+      'Need one tapBip32Derivation masterFingerprint to match the HDSigner fingerprint',
+    );
+  }
+  const signers = myDerivations.map(bipDv => {
+    const node = hdKeyPair.derivePath(bipDv.path);
+    if (
+      tools.compare(bipDv.pubkey, (0, bip371_js_1.toXOnly)(node.publicKey)) !==
+      0
+    ) {
+      throw new Error('pubkey did not match tapBip32Derivation');
+    }
+    // Key-path spend: leafHashes is empty, tweak the derived key
+    if (!bipDv.leafHashes || bipDv.leafHashes.length === 0) {
+      if (typeof node.tweak !== 'function') {
+        throw new Error(
+          'HDSigner must implement tweak method for Taproot key-path signing',
+        );
+      }
+      const tweakHash = (0, bip341_js_1.tapTweakHash)(
+        (0, bip371_js_1.toXOnly)(node.publicKey),
+        input.tapMerkleRoot,
+      );
+      return node.tweak(tweakHash);
+    }
+    // Script-path spend: return untweaked derived node
     return node;
   });
   return signers;
