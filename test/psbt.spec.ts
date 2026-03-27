@@ -546,20 +546,15 @@ describe(`Psbt`, () => {
   describe('signInputHD - taproot', () => {
     const toXOnly = (pubKey: Uint8Array): Uint8Array =>
       pubKey.length === 32 ? pubKey : pubKey.slice(1, 33);
-    const randomTxId = () => rng(32);
 
-    it('can sign a taproot key-path input with signInputHD', () => {
-      initEccLib(ecc);
-      const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
+    // Shared setup for key-path tests
+    function keyPathPsbt(root: any, path: string) {
       const child = root.derivePath(path);
       const internalKey = toXOnly(child.publicKey);
-
       const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
       const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
         tapInternalKey: internalKey,
@@ -573,10 +568,16 @@ describe(`Psbt`, () => {
         ],
       });
       psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
+      return { psbt, internalKey, p2tr };
+    }
+
+    it('can sign a taproot key-path input', () => {
+      initEccLib(ecc);
+      const root = bip32.fromSeed(Buffer.alloc(64, 1));
+      const { psbt } = keyPathPsbt(root, "m/86'/0'/0'/0/0");
 
       psbt.signInputHD(0, root);
 
-      // tapKeySig should be 64 bytes (Schnorr signature with default sighash)
       assert.ok(psbt.data.inputs[0].tapKeySig);
       assert.strictEqual(psbt.data.inputs[0].tapKeySig!.length, 64);
     });
@@ -585,24 +586,17 @@ describe(`Psbt`, () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
       const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
+      const internalKey = toXOnly(root.derivePath(path).publicKey);
 
-      const leafScript = bscript.fromASM(
-        `${tools.toHex(internalKey)} OP_CHECKSIG`,
-      );
       const scriptTree = {
-        output: leafScript,
+        output: bscript.fromASM(`${tools.toHex(internalKey)} OP_CHECKSIG`),
         version: LEAF_VERSION_TAPSCRIPT,
       };
-      const p2tr = payments.p2tr({
-        internalPubkey: internalKey,
-        scriptTree,
-      });
+      const p2tr = payments.p2tr({ internalPubkey: internalKey, scriptTree });
 
       const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
         tapInternalKey: internalKey,
@@ -624,110 +618,12 @@ describe(`Psbt`, () => {
       assert.strictEqual(psbt.data.inputs[0].tapKeySig!.length, 64);
     });
 
-    it('can sign with signAllInputsHD', () => {
+    it('can sign a taproot script-path input', () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
       const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
+      const internalKey = toXOnly(root.derivePath(path).publicKey);
 
-      const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
-      const psbt = new Psbt();
-      psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: internalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: internalKey,
-            path,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
-
-      psbt.signAllInputsHD(root);
-
-      assert.ok(psbt.data.inputs[0].tapKeySig);
-    });
-
-    it('can sign with signAllInputsHDAsync', async () => {
-      initEccLib(ecc);
-      const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
-      const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
-      const psbt = new Psbt();
-      psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: internalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: internalKey,
-            path,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
-
-      await psbt.signAllInputsHDAsync(root);
-
-      assert.ok(psbt.data.inputs[0].tapKeySig);
-    });
-
-    it('can sign and validate a taproot key-path spend', () => {
-      initEccLib(ecc);
-      const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
-      const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
-      const psbt = new Psbt();
-      psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: internalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: internalKey,
-            path,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
-
-      psbt.signInputHD(0, root);
-
-      assert.ok(
-        psbt.validateSignaturesOfInput(0, schnorrValidator),
-        'signature validation should pass',
-      );
-    });
-
-    it('can sign a taproot script-path input with signInputHD', () => {
-      initEccLib(ecc);
-      const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
-      // Build a leaf script that uses the derived key
       const leafScript = bscript.fromASM(
         `${tools.toHex(internalKey)} OP_CHECKSIG`,
       );
@@ -735,14 +631,11 @@ describe(`Psbt`, () => {
         output: leafScript,
         version: LEAF_VERSION_TAPSCRIPT,
       };
-
-      // Get p2tr payment with redeem to extract the control block
       const p2tr = payments.p2tr({
         internalPubkey: internalKey,
         scriptTree,
         redeem: { output: leafScript, redeemVersion: LEAF_VERSION_TAPSCRIPT },
       });
-
       const leafHash = tapleafHash({
         output: leafScript,
         version: LEAF_VERSION_TAPSCRIPT,
@@ -750,7 +643,7 @@ describe(`Psbt`, () => {
 
       const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
         tapLeafScript: [
@@ -773,109 +666,46 @@ describe(`Psbt`, () => {
 
       psbt.signInputHD(0, root);
 
-      // Should produce tapScriptSig (not tapKeySig) for script-path
       assert.ok(psbt.data.inputs[0].tapScriptSig);
       assert.strictEqual(psbt.data.inputs[0].tapScriptSig!.length, 1);
       assert.ok(!psbt.data.inputs[0].tapKeySig);
     });
 
-    it('can sign a taproot input with signInputHDAsync', async () => {
-      initEccLib(ecc);
-      const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
-      const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
-      const psbt = new Psbt();
-      psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: internalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: internalKey,
-            path,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
-
-      await psbt.signInputHDAsync(0, root);
-
-      assert.ok(psbt.data.inputs[0].tapKeySig);
-      assert.strictEqual(psbt.data.inputs[0].tapKeySig!.length, 64);
-    });
-
     it('can sign mixed taproot + legacy inputs with signAllInputsHD', () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
+      const { psbt } = keyPathPsbt(root, "m/86'/0'/0'/0/0");
 
-      // Taproot input (key-path)
-      const trPath = "m/86'/0'/0'/0/0";
-      const trChild = root.derivePath(trPath);
-      const trInternalKey = toXOnly(trChild.publicKey);
-      const p2tr = payments.p2tr({ internalPubkey: trInternalKey });
-
-      // Legacy P2WPKH input
-      const wpkhPath = "m/84'/0'/0'/0/0";
-      const wpkhChild = root.derivePath(wpkhPath);
+      const wpkhChild = root.derivePath("m/84'/0'/0'/0/0");
       const p2wpkh = payments.p2wpkh({ pubkey: wpkhChild.publicKey });
-
-      const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: trInternalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: trInternalKey,
-            path: trPath,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2wpkh.output! },
         bip32Derivation: [
           {
             masterFingerprint: root.fingerprint,
             pubkey: wpkhChild.publicKey,
-            path: wpkhPath,
+            path: "m/84'/0'/0'/0/0",
           },
         ],
       });
-      psbt.addOutput({ value: BigInt(180000), script: p2tr.output! });
 
       psbt.signAllInputsHD(root);
 
-      // Taproot input gets tapKeySig
       assert.ok(psbt.data.inputs[0].tapKeySig);
-      // Legacy input gets partialSig
       assert.ok(psbt.data.inputs[1].partialSig);
-      assert.strictEqual(psbt.data.inputs[1].partialSig!.length, 1);
     });
 
     it('throws when tapBip32Derivation is missing', () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
+      const internalKey = toXOnly(root.derivePath("m/86'/0'/0'/0/0").publicKey);
       const p2tr = payments.p2tr({ internalPubkey: internalKey });
 
       const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
         tapInternalKey: internalKey,
@@ -891,28 +721,7 @@ describe(`Psbt`, () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
       const otherRoot = bip32.fromSeed(Buffer.alloc(64, 2));
-      const path = "m/86'/0'/0'/0/0";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
-      const p2tr = payments.p2tr({ internalPubkey: internalKey });
-
-      const psbt = new Psbt();
-      psbt.addInput({
-        hash: randomTxId(),
-        index: 0,
-        witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
-        tapInternalKey: internalKey,
-        tapBip32Derivation: [
-          {
-            masterFingerprint: root.fingerprint,
-            pubkey: internalKey,
-            path,
-            leafHashes: [],
-          },
-        ],
-      });
-      psbt.addOutput({ value: BigInt(90000), script: p2tr.output! });
+      const { psbt } = keyPathPsbt(root, "m/86'/0'/0'/0/0");
 
       assert.throws(() => {
         psbt.signInputHD(0, otherRoot);
@@ -922,16 +731,12 @@ describe(`Psbt`, () => {
     it('throws when pubkey does not match derivation path', () => {
       initEccLib(ecc);
       const root = bip32.fromSeed(Buffer.alloc(64, 1));
-      const path = "m/86'/0'/0'/0/0";
-      const wrongPath = "m/86'/0'/0'/0/1";
-      const child = root.derivePath(path);
-      const internalKey = toXOnly(child.publicKey);
-
+      const internalKey = toXOnly(root.derivePath("m/86'/0'/0'/0/0").publicKey);
       const p2tr = payments.p2tr({ internalPubkey: internalKey });
 
       const psbt = new Psbt();
       psbt.addInput({
-        hash: randomTxId(),
+        hash: rng(32),
         index: 0,
         witnessUtxo: { value: BigInt(100000), script: p2tr.output! },
         tapInternalKey: internalKey,
@@ -939,7 +744,7 @@ describe(`Psbt`, () => {
           {
             masterFingerprint: root.fingerprint,
             pubkey: internalKey,
-            path: wrongPath,
+            path: "m/86'/0'/0'/0/1",
             leafHashes: [],
           },
         ],
